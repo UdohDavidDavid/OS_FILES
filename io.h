@@ -12,7 +12,11 @@ static inline uint8_t inb(uint16_t port)
 	return result;
 }
 
-uint8_t keyboard_read_scancode(void)
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint8_t keyboard_read_scancode(void)
 {
 	// Wait until bit 0 of status register is set
 	while (!(inb(PORT_KEYBOARD_STATUS) & 1)) {
