@@ -41,6 +41,8 @@ enum vga_color {
 	VGA_COLOR_WHITE = 15,
 };
 
+char *default_commands[100] = {"clear", "calc"};
+
 static inline uint8_t vga_entry_color(enum vga_color fg, enum vga_color bg)
 {
 	return fg | bg << 4;
@@ -85,11 +87,6 @@ int split(const char *str, char split, char (*result)[50])
 			result[word_index][char_index++] = str[i];
 		}
 	}
-	/*
-	if (strcmp(result[word_index], " ")) {
-		result[word_index][char_index] = '\0';
-		return word_index + 1;
-	}*/
 
     // only add the last word if it’s not empty
     if (char_index > 0) {
@@ -124,6 +121,104 @@ int strtoken(const char *str, const char split, char (*result)[50])
 }
 */
 
+// Hashmap On the stack ///////////////////////////////////
+
+typedef void (*command_function)(void);
+
+void do_calc_stuff();
+void clear_screen();
+void show_all_commands();
+
+
+int ht_size = 50;
+typedef struct entry_t {
+	char *key;
+	command_function value;
+} entry_t;
+
+typedef struct {
+	int size;
+	entry_t entries[50];
+} ht_t;
+
+uint64_t hash(const char *key);
+ht_t ht_create();
+void ht_set(ht_t *hashmap, char *key, command_function value);
+int ht_check(ht_t *hashmap, const char *key);
+char *ht_get(ht_t *hashmap, const char *key);
+
+uint64_t hash(const char *key)
+{
+	uint64_t hash = 1469598103934665603UL;
+	int c;
+
+	while ((c = *key++))
+	{
+		hash ^= c;
+		hash *= 1099511628211UL;
+	}
+
+	return hash;
+
+}
+
+ht_t ht_create()
+{
+	ht_t hashmap;
+	for (int i = 0; i < ht_size; ++i)
+		hashmap.entries[i].key = "0";
+
+	return hashmap;
+}
+
+void ht_set(ht_t *hashmap, char *key, command_function value)
+{
+	int index = hash(key) % ht_size;
+	// Set the value
+	(*hashmap).entries[index].key = key;
+	(*hashmap).entries[index].value = value;
+}
+
+int ht_check(ht_t *hashmap, const char *key)
+{
+	int index = hash(key) % ht_size;
+	if (strcmp((*hashmap).entries[index].key, key) == 0)
+		return 1;
+	return 0;
+}
+
+
+/*
+command_function *ht_get(ht_t *hashmap, const char *key)
+{
+	int index = hash(key) % ht_size;
+	if ((*hashmap).entries[index].key == key) {
+		return (*hashmap).entries[index].value;
+	}
+	return "Sorry";
+}
+*/
+ht_t hashmap;
+
+//////////////////////////////////////////////////////////
+
+/// Argument Parser /////////////////////////////////////
+
+typedef void (*command_fn)(void);
+
+typedef struct {
+	const char* name;
+	command_fn func;
+} Command;
+
+
+Command cmds[] = {
+	{ "calc", do_calc_stuff },
+	{ "clear", clear_screen },
+};
+
+
+/////////////////////////////////////////////////////////
 
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
@@ -278,7 +373,7 @@ void show_current_command(int y)
 
     for (int x = strlen(shell_term); x < VGA_WIDTH; ++x) {
 		char c = get_char_from_pos(x, prev_y);
-		if (c == ' ' || c == '\0')
+		if (c == ' ' || c == '\0' || c == '\n' || c == '\r')
 			break;
 		command[count++] = c;
     }
@@ -288,27 +383,61 @@ void show_current_command(int y)
 		clear_screen();
 	}
 
-	//terminal_writestring(command);
+	int size = sizeof(cmds)/sizeof(cmds[0]);
+	int check = ht_check(&hashmap, command);
+	int index = hash(command) % ht_size;
+
+	if (check) {
+		hashmap.entries[index].value();
+	}
+
+	/*
+	for (int i = 0; i < size; i++) {
+		if (!strcmp(command, )) {
+			hashmap.func();
+			return;
+		}
+	}
+	*/
+}
+
+void define_hashmap()
+{
+	hashmap = ht_create();
+	ht_set(&hashmap, "clear", clear_screen);
+	ht_set(&hashmap, "calc", do_calc_stuff);
+	ht_set(&hashmap, "ls", show_all_commands);
+	ht_set(&hashmap, "cls", clear_screen);
+}
+
+void do_calc_stuff()
+{
+	terminal_writestring("Hi nigga\n");
+}
+
+void show_all_commands()
+{
+	char *key;
+	int count = 1;
+	for (int i = 0; i < ht_size; ++i) {
+		if (strcmp(hashmap.entries[i].key, "0") != 0) {
+			key = hashmap.entries[i].key;
+			terminal_writestring(key);
+			terminal_writestring("\n");
+			count++;
+		}
+	}
 }
 
 
 void kernel_main(void)
 {
-	/* Initialize terminal interface */
+	// Initialize the terminal
 	terminal_initialize();
+	define_hashmap();
 
-	/* Newline support is left as an exercise. */
-	terminal_writestring("Hello, kernel World!\n");
-	terminal_writestring("New Line by me\n");
-	terminal_writestring("This is going to be a very long line hahahahahahahahhahahahahahahaahahahahahahahhahahahahahhahaahahahahahahahahah\n");
-	for (size_t i = 0; i < 100; i++) {
-		terminal_writestring("Character\n");
-	}
-	clear_screen();
-
-    /* Programming the shell now */
 	terminal_writestring(shell_term);
-    update_cursor(terminal_column, terminal_row);
+	update_cursor(terminal_column, terminal_row);
 	while (1) {
 		uint8_t scancode = keyboard_read_scancode();
 		char key = get_char_from_scancode(scancode);
@@ -316,43 +445,44 @@ void kernel_main(void)
 			if (key == '\n') {
 				column = 0;
 				terminal_column = 0;
-                terminal_row++;
+				terminal_row++;
 				show_current_command(terminal_row);
 				int count = split(argsstr, ' ', command_result);
+				/*
 				for (int i = 0; i < count; i++) {
 					terminal_writestring("[");
 					terminal_writestring(command_result[i]);
 					terminal_writestring("]");
-					terminal_writestring("\n");
-				}
+					terminal_writestring("\n"); }
+				*/
 				terminal_writestring(shell_term);
 				for (int i = 0; argsstr[i] != '\0'; ++i) {
 					argsstr[i] = '\0';
 				}
-                update_cursor(terminal_column, terminal_row);
+				update_cursor(terminal_column, terminal_row);
 			} else if (scancode == 0x01) {
-                clear_screen();
-                terminal_writestring(shell_term);
-                update_cursor(terminal_column, terminal_row);
+				clear_screen();
+				terminal_writestring(shell_term);
+				update_cursor(terminal_column, terminal_row);
 			} else if (key == '\b') {
 				backspace_argstr(&column);
-                if (!(terminal_buffer[terminal_row * VGA_WIDTH] == vga_entry('#', terminal_color) && terminal_column <= strlen(shell_term))) {
-                    if (terminal_column == 0) {
-                        terminal_column = VGA_WIDTH;
-                        terminal_row -= 1;
-                        update_cursor(terminal_column, terminal_row);
-                    } else {
-                        terminal_column--;
-                        terminal_buffer[terminal_row * VGA_WIDTH + terminal_column] = vga_entry(' ', terminal_color);
-                        update_cursor(terminal_column, terminal_row);
-                    }
-                }
-            } else {
-                terminal_putchar(key);
+				if (!(terminal_buffer[terminal_row * VGA_WIDTH] == vga_entry('#', terminal_color) && terminal_column <= strlen(shell_term))) {
+					if (terminal_column == 0) {
+						terminal_column = VGA_WIDTH;
+						terminal_row -= 1;
+						update_cursor(terminal_column, terminal_row);
+					} else {
+						terminal_column--;
+						terminal_buffer[terminal_row * VGA_WIDTH + terminal_column] = vga_entry(' ', terminal_color);
+						update_cursor(terminal_column, terminal_row);
+					}
+				}
+			} else {
+				terminal_putchar(key);
 				get_string_of_char(column, key);
 				column++;
-                update_cursor(terminal_column, terminal_row);
-            }
+				update_cursor(terminal_column, terminal_row);
+			}
 		}
 	}
 }
